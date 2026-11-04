@@ -1,9 +1,24 @@
 import { Controller, Get, Query } from '@nestjs/common';
-import { ApiPropertyOptional, ApiTags } from '@nestjs/swagger';
-import { IsISO8601, IsOptional, IsString } from 'class-validator';
+import { ApiOkResponse, ApiProperty, ApiPropertyOptional, ApiTags } from '@nestjs/swagger';
+import { IsISO8601, IsOptional, IsString, MinLength } from 'class-validator';
 import { Roles } from '../../common/auth';
 import { PaginationQuery } from '../../common/pagination/pagination';
 import { AuditService } from './audit.service';
+
+export class AuditUserLookupDto {
+  @ApiProperty() id: string;
+  @ApiProperty() name: string;
+  @ApiProperty() email: string;
+}
+
+export class AuditUserLookupPageDto {
+  @ApiProperty({ type: [AuditUserLookupDto] }) data: AuditUserLookupDto[];
+  @ApiProperty() meta: { page: number; pageSize: number; total: number };
+}
+
+export class ListAuditUsersQuery extends PaginationQuery {
+  @ApiPropertyOptional() @IsString() @MinLength(1) search!: string;
+}
 
 export class ListAuditLogsQuery extends PaginationQuery {
   @ApiPropertyOptional() @IsOptional() @IsString() action?: string;
@@ -24,5 +39,11 @@ export class AuditController {
   @Get()
   list(@Query() q: ListAuditLogsQuery) {
     return this.audit.list(q);
+  }
+
+  @Get('users')
+  @ApiOkResponse({ type: AuditUserLookupPageDto })
+  users(@Query() q: ListAuditUsersQuery) {
+    return this.audit.listUsers(q);
   }
 }
