@@ -58,7 +58,7 @@ describe('reports module (integration)', () => {
   async function createParcel(
     suffix: string,
     status: 'DELIVERED' | 'FAILED' | 'IN_TRANSIT',
-    history: { toStatus: 'CREATED' | 'DELIVERED' | 'FAILED'; at: string }[],
+    history: { toStatus: 'CREATED' | 'OUT_FOR_DELIVERY' | 'DELIVERED' | 'FAILED'; at: string }[],
   ): Promise<Parcel> {
     const customer = await t.prisma.user.findUniqueOrThrow({
       where: { email: 'customer@swiftdrop.test' },
@@ -82,7 +82,10 @@ describe('reports module (integration)', () => {
         weightKg: 1,
         feeCents: 500,
         createdAt: new Date(history[0].at),
-        deliveredAt: status === 'DELIVERED' ? new Date(history[1].at) : null,
+        deliveredAt:
+          status === 'DELIVERED'
+            ? new Date([...history].reverse().find((h) => h.toStatus === 'DELIVERED')!.at)
+            : null,
         statusHistory: {
           create: history.map((entry, index) => ({
             fromStatus: index === 0 ? null : history[index - 1].toStatus,
@@ -128,7 +131,8 @@ describe('reports module (integration)', () => {
       .query({ from: query.from, to: query.to })
       .set('Cookie', cookie)
       .expect(200);
-    expect(couriers.body).toEqual([
+    // Filter to this courier: other suites may add assignments to the shared test DB.
+    expect(couriers.body.filter((c: { courierId: string }) => c.courierId === courierId)).toEqual([
       { courierId, name: 'Chamal Courier', assigned: 1, delivered: 1, failed: 0 },
     ]);
   });
@@ -153,5 +157,98 @@ describe('reports module (integration)', () => {
       .expect((response) => {
         expect(response.body.error.code).toBe('VALIDATION_FAILED');
       });
+  });
+
+  describe('re-attempts and reassignment', () => {
+    // A separate week, so the first test's totals are unaffected.
+    const range = { from: '2026-09-10', to: '2026-09-12' };
+    let courier2Id: string;
+
+    beforeAll(async () => {
+      courier2Id = (
+        await t.prisma.user.findUniqueOrThrow({ where: { email: 'courier2@swiftdrop.test' } })
+      ).id;
+      // Courier 1 fails the first attempt, the parcel is reassigned, courier 2 delivers it.
+      const parcel = await createParcel('4', 'DELIVERED', [
+        { toStatus: 'CREATED', at: '2026-09-10T03:00:00.000Z' },
+        { toStatus: 'FAILED', at: '2026-09-10T08:00:00.000Z' },
+        { toStatus: 'OUT_FOR_DELIVERY', at: '2026-09-11T03:00:00.000Z' },
+        { toStatus: 'DELIVERED', at: '2026-09-11T06:00:00.000Z' },
+      ]);
+      parcelIds.push(parcel.id);
+      await t.prisma.courierAssignment.createMany({
+        data: [
+          {
+            parcelId: parcel.id,
+            courierId,
+            assignedById: dispatcherId,
+            status: 'CANCELLED',
+            assignedAt: new Date('2026-09-10T04:00:00.000Z'),
+          },
+          {
+            parcelId: parcel.id,
+            courierId: courier2Id,
+            assignedById: dispatcherId,
+            status: 'COMPLETED',
+            assignedAt: new Date('2026-09-10T09:00:00.000Z'),
+            completedAt: new Date('2026-09-11T06:00:00.000Z'),
+          },
+        ],
+      });
+    });
+
+    it('counts a parcel that failed and was then delivered once, as delivered', async () => {
+      const res = await request(t.http)
+        .get('/api/v1/admin/reports/deliveries')
+        .query({ ...range, zoneId })
+        .set('Cookie', await t.cookieFor('ADMIN'))
+        .expect(200);
+      expect(res.body).toMatchObject({ total: 1, delivered: 1, failed: 0, inProgress: 0 });
+    });
+
+    it('credits the failure to the first courier and the delivery to the second', async () => {
+      const res = await request(t.http)
+        .get('/api/v1/admin/reports/couriers')
+        .query({ ...range, zoneId })
+        .set('Cookie', await t.cookieFor('ADMIN'))
+        .expect(200);
+      const byId = new Map(
+        res.body.map((c: { courierId: string }) => [c.courierId, c] as [string, unknown]),
+      );
+      expect(byId.get(courierId)).toMatchObject({ assigned: 1, delivered: 0, failed: 1 });
+      expect(byId.get(courier2Id)).toMatchObject({ assigned: 1, delivered: 1, failed: 0 });
+    });
+  });
+
+  describe('negative cases', () => {
+    const ENDPOINTS = ['deliveries', 'daily-volume', 'couriers'];
+
+    it.each(ENDPOINTS)('GET /admin/reports/%s requires a session (401)', async (path) => {
+      await request(t.http).get(`/api/v1/admin/reports/${path}`).expect(401);
+    });
+
+    it.each(['MERCHANT', 'COURIER', 'CUSTOMER'] as const)(
+      'rejects the %s role (403)',
+      async (role) => {
+        const cookie = await t.cookieFor(role);
+        for (const path of ENDPOINTS) {
+          await request(t.http)
+            .get(`/api/v1/admin/reports/${path}`)
+            .set('Cookie', cookie)
+            .expect(403);
+        }
+      },
+    );
+
+    it.each([
+      { from: '2026-10-05', to: '2026-10-01' },
+      { from: 'not-a-date', to: '2026-10-01' },
+    ])('rejects an invalid range %o (400)', async (query) => {
+      await request(t.http)
+        .get('/api/v1/admin/reports/deliveries')
+        .query(query)
+        .set('Cookie', await t.cookieFor('ADMIN'))
+        .expect(400);
+    });
   });
 });

@@ -4,6 +4,10 @@ import { createTestApp, type TestContext } from '../utils/app';
 
 const ACTION = 'm9.audit.integration';
 
+/** YYYY-MM-DD `days` from now, so the test doesn't expire. */
+const isoDay = (days: number) =>
+  new Date(Date.now() + days * 86_400_000).toISOString().slice(0, 10);
+
 describe('audit module (integration)', () => {
   let t: TestContext;
   let audit: AuditService;
@@ -27,6 +31,7 @@ describe('audit module (integration)', () => {
         metadata: {
           index,
           safe: 'visible',
+          previousValue: null,
           accessToken: 'must-not-be-returned',
         },
       });
@@ -51,8 +56,8 @@ describe('audit module (integration)', () => {
         action: ACTION,
         entityType: 'integration_test',
         actorId: adminId,
-        from: '2026-01-01',
-        to: '2027-01-01',
+        from: isoDay(-1),
+        to: isoDay(1),
         page: 1,
         pageSize: 2,
       })
@@ -75,6 +80,7 @@ describe('audit module (integration)', () => {
     );
     expect(response.body.data[0].metadata).toEqual(expect.objectContaining({ safe: 'visible' }));
     expect(response.body.data[0].metadata.accessToken).toBeUndefined();
+    expect(response.body.data[0].metadata).toHaveProperty('previousValue', null);
     expect(response.body.data[0].timestamp).toBeDefined();
   });
 
@@ -91,11 +97,65 @@ describe('audit module (integration)', () => {
     });
   });
 
-  it.each(['DISPATCHER', 'CUSTOMER'] as const)('rejects %s access', async (role) => {
+  it.each(['DISPATCHER', 'CUSTOMER', 'MERCHANT', 'COURIER'] as const)(
+    'rejects %s access to both endpoints (403)',
+    async (role) => {
+      const cookie = await t.cookieFor(role);
+      await request(t.http).get('/api/v1/admin/audit-logs').set('Cookie', cookie).expect(403);
+      await request(t.http)
+        .get('/api/v1/admin/audit-logs/users')
+        .query({ search: 'Ada' })
+        .set('Cookie', cookie)
+        .expect(403);
+    },
+  );
+
+  it.each(['/api/v1/admin/audit-logs', '/api/v1/admin/audit-logs/users?search=Ada'])(
+    '%s requires a session (401)',
+    async (url) => {
+      await request(t.http).get(url).expect(401);
+    },
+  );
+
+  it('matches entity types regardless of case', async () => {
+    const response = await request(t.http)
+      .get('/api/v1/admin/audit-logs')
+      .query({ action: ACTION, entityType: 'INTEGRATION_TEST' })
+      .set('Cookie', await t.cookieFor('ADMIN'))
+      .expect(200);
+    expect(response.body.meta.total).toBe(3);
+  });
+
+  it('rejects an end date before the start date (400)', async () => {
     await request(t.http)
       .get('/api/v1/admin/audit-logs')
-      .set('Cookie', await t.cookieFor(role))
-      .expect(403);
+      .query({ from: isoDay(0), to: isoDay(-5) })
+      .set('Cookie', await t.cookieFor('ADMIN'))
+      .expect(400);
+  });
+
+  describe('GET /admin/audit-logs/users', () => {
+    it('finds users by name for admins', async () => {
+      const response = await request(t.http)
+        .get('/api/v1/admin/audit-logs/users')
+        .query({ search: 'ada' })
+        .set('Cookie', await t.cookieFor('ADMIN'))
+        .expect(200);
+      expect(response.body.data).toEqual(
+        expect.arrayContaining([{ id: adminId, name: 'Ada Admin', email: 'admin@swiftdrop.test' }]),
+      );
+    });
+
+    it.each([{}, { search: '' }, { search: '   ' }])(
+      'requires a non-blank search (400) for %o',
+      async (query) => {
+        await request(t.http)
+          .get('/api/v1/admin/audit-logs/users')
+          .query(query)
+          .set('Cookie', await t.cookieFor('ADMIN'))
+          .expect(400);
+      },
+    );
   });
 
   it('does not persist audit records from a rolled-back transaction', async () => {

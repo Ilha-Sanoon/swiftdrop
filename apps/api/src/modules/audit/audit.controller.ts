@@ -1,5 +1,6 @@
 import { Controller, Get, Query } from '@nestjs/common';
 import { ApiOkResponse, ApiProperty, ApiPropertyOptional, ApiTags } from '@nestjs/swagger';
+import { Transform } from 'class-transformer';
 import { IsISO8601, IsOptional, IsString, MinLength } from 'class-validator';
 import { Roles } from '../../common/auth';
 import { PaginationQuery } from '../../common/pagination/pagination';
@@ -11,13 +12,24 @@ export class AuditUserLookupDto {
   @ApiProperty() email: string;
 }
 
+export class AuditPageMetaDto {
+  @ApiProperty() page: number;
+  @ApiProperty() pageSize: number;
+  @ApiProperty() total: number;
+}
+
 export class AuditUserLookupPageDto {
   @ApiProperty({ type: [AuditUserLookupDto] }) data: AuditUserLookupDto[];
-  @ApiProperty() meta: { page: number; pageSize: number; total: number };
+  @ApiProperty({ type: AuditPageMetaDto }) meta: AuditPageMetaDto;
 }
 
 export class ListAuditUsersQuery extends PaginationQuery {
-  @ApiPropertyOptional() @IsString() @MinLength(1) search!: string;
+  // Required, and trimmed first so an all-blank search doesn't match every user.
+  @ApiProperty({ minLength: 1 })
+  @Transform(({ value }) => (typeof value === 'string' ? value.trim() : value))
+  @IsString()
+  @MinLength(1)
+  search!: string;
 }
 
 export class ListAuditLogsQuery extends PaginationQuery {

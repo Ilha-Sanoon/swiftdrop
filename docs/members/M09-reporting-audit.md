@@ -214,3 +214,22 @@ latest-outcome changes are implemented in this branch. Remaining runtime depende
 - **M4:** Complete parcel lifecycle/status-history integration where applicable
 
 These dependencies must be verified after integration; Member 9 does not implement them here.
+
+## Review fixes (merge of PR #10)
+
+- **Courier performance** credits each outcome to the courier whose assignment was current when it
+  happened (latest DELIVERED/FAILED after that assignment and before the parcel's next one). Joining
+  on the parcel alone gave a reassigned parcel's delivery to every courier and hid the first
+  courier's failure. Integration test: courier 1 fails, parcel reassigned, courier 2 delivers.
+- Integration tests now run the real SQL for "failed, re-attempted, delivered = one delivery", and
+  cover 401s, 403s for every non-allowed role, 400s for bad ranges, and the user lookup endpoint.
+  The audit test uses dates relative to today (it hard-coded 2027).
+- Audit: the action filter uses M5's real name `webhook_secret.rotated` and drops `user.deactivated`
+  (deactivation is recorded as `user.status_changed`); entity-type filter is case-insensitive;
+  `search` is required and trimmed; sanitised metadata keeps `null` values.
+- CSV export also neutralises cells starting with a tab or carriage return. Dashboards show an
+  error instead of a stuck spinner on network failures.
+- **Follow-ups:** `summarizeActivity` in `reports.service.ts` is only used by unit tests (the real
+  numbers come from SQL); remove it or use it. `GET /admin/audit-logs` has no `@ApiOkResponse`, so
+  the web code casts its response. A parcel re-attempted after FAILED counts as failed until it is
+  delivered.

@@ -143,14 +143,20 @@ export function ReportsDashboard({
       ...(to ? { to } : {}),
       ...(zoneId ? { zoneId } : {}),
     };
-    const [summary, dailyVolume, couriers] = await Promise.all([
+    // A network failure rejects instead of returning { error }; show it rather than spin forever.
+    const responses = await Promise.all([
       api.GET('/api/v1/admin/reports/deliveries', { params: { query } }),
       api.GET('/api/v1/admin/reports/daily-volume', { params: { query } }),
       api.GET('/api/v1/admin/reports/couriers', {
         params: { query },
       }),
-    ]);
+    ]).catch(() => null);
     setLoading(false);
+    if (!responses) {
+      setError('Could not reach the server. Check your connection and try again.');
+      return;
+    }
+    const [summary, dailyVolume, couriers] = responses;
     const requestError = summary.error ?? dailyVolume.error ?? couriers.error;
     if (requestError || !summary.data || !dailyVolume.data || !couriers.data) {
       setError(errorMessage(requestError, 'Could not load reports'));

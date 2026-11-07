@@ -294,39 +294,38 @@ export class ReportsService {
     const zoneFilter = q.zoneId
       ? Prisma.sql`AND (p."pickupZoneId" = ${q.zoneId} OR p."dropoffZoneId" = ${q.zoneId})`
       : Prisma.empty;
+    // Credit each outcome to the courier whose assignment was current when it happened: the
+    // parcel's latest DELIVERED/FAILED event after this assignment and before the parcel's next
+    // assignment. (Joining on the parcel alone gave a re-assigned parcel's delivery to every
+    // courier who ever held it, and hid the first courier's failure.)
     const rows = await this.prisma.$queryRaw<CourierPerformanceRow[]>(Prisma.sql`
-      WITH latest_terminal_events AS (
-        SELECT
-          h."parcelId",
-          h."toStatus"::text AS status,
-          ROW_NUMBER() OVER (
-            PARTITION BY h."parcelId"
-            ORDER BY h."createdAt" DESC, h.id DESC
-          ) AS row_number
-        FROM "parcel_status_history" h
-        WHERE h."createdAt" >= ${range.start}
-          AND h."createdAt" < ${range.end}
-          AND h."toStatus"::text IN ('DELIVERED', 'FAILED')
-      ),
-      latest_outcomes AS (
-        SELECT "parcelId", status
-        FROM latest_terminal_events
-        WHERE row_number = 1
-      )
       SELECT
         u.id AS "courierId",
         u.name,
         COUNT(DISTINCT ca.id)::int AS assigned,
-        COUNT(DISTINCT latest_outcomes."parcelId") FILTER (
-          WHERE latest_outcomes.status = 'DELIVERED'
-        )::int AS delivered,
-        COUNT(DISTINCT latest_outcomes."parcelId") FILTER (
-          WHERE latest_outcomes.status = 'FAILED'
-        )::int AS failed
+        COUNT(DISTINCT ca."parcelId") FILTER (WHERE outcome.status = 'DELIVERED')::int AS delivered,
+        COUNT(DISTINCT ca."parcelId") FILTER (WHERE outcome.status = 'FAILED')::int AS failed
       FROM "courier_assignments" ca
       INNER JOIN "parcels" p ON p.id = ca."parcelId"
       INNER JOIN "users" u ON u.id = ca."courierId"
-      LEFT JOIN latest_outcomes ON latest_outcomes."parcelId" = ca."parcelId"
+      LEFT JOIN LATERAL (
+        SELECT h."toStatus"::text AS status
+        FROM "parcel_status_history" h
+        WHERE h."parcelId" = ca."parcelId"
+          AND h."toStatus"::text IN ('DELIVERED', 'FAILED')
+          AND h."createdAt" >= ca."assignedAt"
+          AND h."createdAt" >= ${range.start}
+          AND h."createdAt" < ${range.end}
+          AND NOT EXISTS (
+            SELECT 1
+            FROM "courier_assignments" later
+            WHERE later."parcelId" = ca."parcelId"
+              AND later."assignedAt" > ca."assignedAt"
+              AND later."assignedAt" <= h."createdAt"
+          )
+        ORDER BY h."createdAt" DESC, h.id DESC
+        LIMIT 1
+      ) outcome ON true
       WHERE ca."assignedAt" >= ${range.start}
         AND ca."assignedAt" < ${range.end}
         ${zoneFilter}

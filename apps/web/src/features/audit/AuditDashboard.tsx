@@ -61,10 +61,10 @@ const emptyFilters: AuditFilters = {
   to: '',
 };
 
+// Must match the action names modules pass to AuditService.record().
 const actions = [
   'user.created',
   'user.role_changed',
-  'user.deactivated',
   'user.status_changed',
   'user.updated',
   'merchant.approved',
@@ -72,7 +72,7 @@ const actions = [
   'merchant.suspended',
   'api_key.created',
   'api_key.revoked',
-  'webhook.secret_rotated',
+  'webhook_secret.rotated',
   'zone.created',
   'zone.updated',
   'pricing_rule.created',
@@ -210,9 +210,14 @@ export function AuditDashboard({
     const requestId = lookupRequestRef.current;
     setLookupLoading(true);
     setLookupError(undefined);
-    const response = (await api.GET('/api/v1/admin/audit-logs/users', {
-      params: { query: { search: name, page: lookupPage + 1, pageSize: 100 } },
-    })) as unknown as { data?: UserLookupPage; error?: unknown };
+    const response = (await api
+      .GET('/api/v1/admin/audit-logs/users', {
+        params: { query: { search: name, page: lookupPage + 1, pageSize: 100 } },
+      })
+      .catch((error: unknown) => ({ data: undefined, error }))) as unknown as {
+      data?: UserLookupPage;
+      error?: unknown;
+    };
     if (requestId !== lookupRequestRef.current) return;
     if (response.error || !response.data) {
       setLookupError(errorMessage(response.error, 'Could not load more users'));
@@ -230,9 +235,15 @@ export function AuditDashboard({
   async function load(nextFilters: AuditFilters, page: number) {
     setLoading(true);
     setError(undefined);
-    const response = (await api.GET('/api/v1/admin/audit-logs', {
-      params: { query: queryFromFilters(nextFilters, page, pageSize) },
-    })) as unknown as { data?: unknown; error?: unknown };
+    // A network failure rejects instead of returning { error }; treat it as an error result.
+    const response = (await api
+      .GET('/api/v1/admin/audit-logs', {
+        params: { query: queryFromFilters(nextFilters, page, pageSize) },
+      })
+      .catch((error: unknown) => ({ data: undefined, error }))) as unknown as {
+      data?: unknown;
+      error?: unknown;
+    };
     const result = response.data as unknown as AuditLogPage | undefined;
     if (response.error || !result)
       setError(errorMessage(response.error, 'Could not load audit logs'));

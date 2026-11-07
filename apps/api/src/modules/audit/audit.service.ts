@@ -51,17 +51,15 @@ const SENSITIVE_METADATA_KEY = /(password|token|secret|api[_-]?key|authorization
 function safeMetadata(value: Prisma.JsonValue | null | undefined): Prisma.JsonValue | null {
   if (value === null || value === undefined) return null;
   if (Array.isArray(value)) {
-    return value
-      .map((item) => safeMetadata(item))
-      .filter((item): item is Prisma.JsonValue => item !== null);
+    return value.map((item) => safeMetadata(item));
   }
   if (typeof value !== 'object') return value;
 
   const result: Record<string, Prisma.JsonValue> = {};
   for (const [key, item] of Object.entries(value)) {
     if (SENSITIVE_METADATA_KEY.test(key)) continue;
-    const safeValue = safeMetadata(item);
-    if (safeValue !== null) result[key] = safeValue;
+    // Keep nulls: `previousRole: null` is meaningful and must not vanish.
+    result[key] = safeMetadata(item);
   }
   return result;
 }
@@ -142,7 +140,8 @@ export class AuditService {
 
     const where: Prisma.AuditLogWhereInput = {
       ...(q.action ? { action: q.action } : {}),
-      ...(q.entityType ? { entityType: q.entityType } : {}),
+      // Modules record entity types in mixed case ('parcel', 'User', 'ApiKey').
+      ...(q.entityType ? { entityType: { equals: q.entityType, mode: 'insensitive' } } : {}),
       ...(q.entityId ? { entityId: q.entityId } : {}),
       ...(q.actorId ? { actorId: q.actorId } : {}),
       ...(q.from || q.to

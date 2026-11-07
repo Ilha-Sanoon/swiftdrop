@@ -74,7 +74,7 @@ describe('AuditService', () => {
         orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
         where: expect.objectContaining({
           action: 'zone.updated',
-          entityType: 'zone',
+          entityType: { equals: 'zone', mode: 'insensitive' },
           entityId: 'zone-2',
           actorId: 'admin-1',
           createdAt: {
